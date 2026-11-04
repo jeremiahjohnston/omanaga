@@ -55,8 +55,16 @@ Physical-press checks that need a human at the desktop with the real mouse:
 - Settings survive the mouse being switched off and on.
 - In the panel: the Replace/Cancel prompt, the message strip and the "On mouse" badge look right, and the factory reset needs a double click.
 - Waking a sleeping mouse from the panel works.
-- In the panel: a Hypershift key on another button (loaded from an old layout) shows its warning and can be changed away, the top buttons dim in the Hypershift view, and "Custom: 1234 DPI" appears with no level highlighted.
+- In the panel: a Hypershift key on another button (loaded from an old layout) shows its warning and can be changed away, and the top buttons dim in the Hypershift view.
 - Saving the levels at a custom DPI keeps that DPI, and DPI up and down still step from the active level afterwards.
-- In the panel: saving a button still works now that its action goes over stdin, and setting a button shows no error after the rename.
 - Under `sudo`, `tools/probe.py` finds the panel's lock file, or warns and carries on if there isn't one.
-- `setup.sh` on a real system: the prompt, the old rule being replaced, `--remove`, and upgrading from `jeremiah.naga` with layouts carried over.
+- `setup.sh --remove` on a real system.
+
+Confirmed by hand on the desktop with 0.4.0:
+
+- `omarchy plugin add` installs and enables the plugin.
+- `setup.sh` shows the rule and commands, asks first, and replaces the old `70-naga-control.rules`.
+- The panel has permission through the new rule.
+- A layout saved under Naga Control is still listed after the move to `~/.local/share/omanaga/`.
+- Saving a button works with its action going over stdin.
+- A custom DPI (1200) shows as "Custom: 1200 DPI" with no level highlighted.
