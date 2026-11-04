@@ -16,8 +16,9 @@ Unofficial and not affiliated with Razer.
 
 - Omarchy 4 (Quattro) and its shell
 - Python 3, standard library only
+- `notify-send` (libnotify, included with Omarchy), for the low-battery alert
 
-It needs no OpenRazer, no kernel module and no other packages. It never uses the network.
+It needs no OpenRazer, no kernel module and nothing else installed. It never uses the network.
 
 ## Install
 
