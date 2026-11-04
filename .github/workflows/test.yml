@@ -1,0 +1,21 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lint
+        run: pip install pyflakes && python3 -m pyflakes naga_ctl.py tools/probe.py tests/test_ctl.py
+      - name: Backend tests
+        run: python3 -I tests/test_ctl.py  # never with -O, which strips the asserts these rely on
+      - name: Shell scripts
+        run: shellcheck *.sh tools/*.sh tests/*.sh
+      - name: Setup script
+        run: tests/test-setup.sh
+      - name: Plain text in the panel
+        run: tests/qml-plain-text.sh

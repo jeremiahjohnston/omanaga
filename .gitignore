@@ -1,0 +1,5 @@
+__pycache__/
+# Local captures and backups from this machine
+snapshot-*.txt
+shell.json.bak
+before-*.json

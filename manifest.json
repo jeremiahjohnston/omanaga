@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.jeremiahjohnston.omanaga",
+  "name": "Omanaga",
+  "version": "0.4.0",
+  "author": "Jeremiah Johnston",
+  "license": "MIT",
+  "description": "Configure the Razer Naga V2 HyperSpeed (this mouse only, on its USB dongle): button mapping, Hypershift, DPI, polling rate and sleep, saved on the mouse, no OpenRazer. Macros and lighting are not supported.",
+  "kinds": ["bar-widget"],
+  "entryPoints": { "barWidget": "Panel.qml" },
+  "barWidget": {
+    "displayName": "Omanaga",
+    "description": "Razer Naga V2 HyperSpeed only: buttons, DPI, polling and sleep. No macros or lighting.",
+    "category": "Hardware",
+    "aliases": ["omanaga", "naga", "razer", "mouse"],
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
