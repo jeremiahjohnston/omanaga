@@ -295,9 +295,9 @@ try: c.apply_preset(f, "factory"); assert 0
 except c.Err as e: assert "Polling" in str(e)
 assert f.mem == was and f.stages == [500] * 5 and f.active == 1 and f.dpi == 500 and f.poll == 2
 # main always answers with JSON
-real_glob, real_hid, real_node = c.glob, c.Hid, c.control_node
+real_glob, real_hid, real_node = c.glob, c.Hid, c.control_nodes
 os.environ["XDG_RUNTIME_DIR"] = tempfile.mkdtemp(); os.environ["OMANAGA_LAYOUTS"] = os.path.join(tempfile.mkdtemp(), "layouts.json")
-c.control_node = lambda: "/dev/hidraw-test"; c.Hid = lambda path: Fake()
+c.control_nodes = lambda: {"hyperspeed": "/dev/hidraw-test"}; c.Hid = lambda path: Fake()
 assert c.main(["state"])["ok"] and c.main(["battery"])["battery"] == 80
 for argv in (["set-button", "64"], ["set-poll"], ["set-dpi", "a,b", "1"], ["set-button", "x", "0", "{}"], ["set-button", "64", "0", "{bad"],
              ["set-button", "64", "0", "[]"], ["set-button", "64", "0", '{"kind": "key", "key": []}'], ["set-button", "64", "0", '{"kind": "key", "key": "a", "mods": [[]]}'],
@@ -315,9 +315,9 @@ def denied(path): raise PermissionError(13, "denied")
 c.Hid = denied; r = c.main(["state"]); assert r["permission"] is False and r["connected"]
 def vanished(path): raise FileNotFoundError(2, "gone")
 c.Hid = vanished; r = c.main(["state"]); assert r["connected"] is False
-c.control_node = lambda: None; r = c.main(["state"]); assert r["connected"] is False and r["ok"] is False
-# control_node picks the Razer dongle's control interface and survives an unplug while looking
-c.Hid, c.control_node = real_hid, real_node
+c.control_nodes = lambda: {}; r = c.main(["state"]); assert r["connected"] is False and r["ok"] is False
+# control_nodes picks the Razer receiver's control interface and survives an unplug while looking
+c.Hid, c.control_nodes = real_hid, real_node
 sysfs = tempfile.mkdtemp()
 def hidraw(name, iface, hid):
     p = os.path.join(sysfs, "devices", iface, f"{hid}.{name}"); os.makedirs(p); open(p + "/uevent", "w").write(f"DRIVER=hid-generic\nHID_ID={hid}\n")
@@ -327,8 +327,8 @@ os.makedirs(os.path.join(sysfs, "class", "hidraw1"))
 class FakeGlob:
     glob = staticmethod(lambda pattern: real_glob.glob(os.path.join(sysfs, "class", "hidraw*")))
 c.glob = FakeGlob
-assert c.control_node() is None
-hidraw("hidraw4", "1-2:1.0", "0003:00001532:000000B4"); assert c.control_node() == "/dev/hidraw4"
+assert c.control_nodes() == {}
+hidraw("hidraw4", "1-2:1.0", "0003:00001532:000000B4"); assert c.control_nodes() == {"hyperspeed": "/dev/hidraw4"}
 c.glob = real_glob
 # a command that worked isn't reported as failed because the refresh after it didn't, and a failed state read doesn't look like an empty layout list
 class StopsAfter(Fake):
@@ -398,11 +398,11 @@ os.makedirs(old := os.path.join(home, "other")); os.environ["OMANAGA_LAYOUTS"] =
 os.chmod(old, 0o755); c.prepare_data_folder(); assert os.stat(old).st_mode & 0o777 == 0o755, "a folder chosen by the variable is left alone"
 os.environ["OMANAGA_LAYOUTS"] = p
 # listing and deleting layouts need no mouse
-c.store_layouts({"a": {}, "B": {}}); c.control_node = lambda: None
+c.store_layouts({"a": {}, "B": {}}); c.control_nodes = lambda: {}
 r = c.main(["state"]); assert not r["ok"] and not r["connected"] and r["layouts"] == ["a", "B"]
 r = c.main(["delete-layout", "a"]); assert r["ok"] and not r["connected"] and r["layouts"] == ["B"] and "error" not in r
 r = c.main(["delete-layout", "nope"]); assert not r["ok"] and "No saved layout" in r["error"]
-c.control_node = real_node
+c.control_nodes = real_node
 # single settings go back if the write doesn't stick, or if the read-back or the write itself fails
 class Flaky(Fake):
     "the next write to a setting takes a wrong value (bad) or breaks the link (dead); dead_read breaks the verify read"
@@ -472,13 +472,14 @@ except c.Err as e: assert c.STATUS[3] in str(e) and "may not be back" in str(e) 
 # a sleeping mouse answers everything with 4, and only moving it wakes it: fail fast, with the wake message, on the first read
 class Asleep(Fake):
     def set_report(self, body): self.tx += 1; r = bytearray(body); r[0] = 4; self.last = bytes(r)
-real_hid, real_node, stub_sleep, slept = c.Hid, c.control_node, time.sleep, []
-c.control_node, time.sleep = (lambda: "/dev/fake"), slept.append
+real_hid, real_node, stub_sleep, slept = c.Hid, c.control_nodes, time.sleep, []
+c.control_nodes, time.sleep = (lambda: {"hyperspeed": "/dev/fake"}), slept.append
 for argv in (["state"], ["battery"], ["set-poll", "500"], ["set-button", "64", "0", json.dumps(ctrl1)], ["preset", "factory"]):
     f = Asleep(); c.Hid = lambda path: f; slept.clear(); r = c.main(argv)
-    assert r == {"ok": False, "connected": True, "permission": True, "error": "The mouse didn't answer. Move it to wake it, then try again."}, (argv, r)
+    assert {k: r[k] for k in ("ok", "connected", "permission", "error")} == {"ok": False, "connected": True, "permission": True, "error": "The mouse didn't answer. Move it to wake it, then try again."}, (argv, r)
+    assert r["mice"] == [{"id": "hyperspeed", "name": "Naga V2 HyperSpeed"}], r
     assert f.tx == c.ATTEMPTS and sum(slept) < 1, (argv, f.tx, sum(slept))
-c.Hid, c.control_node, time.sleep = real_hid, real_node, stub_sleep
+c.Hid, c.control_nodes, time.sleep = real_hid, real_node, stub_sleep
 # lowering the sleep timer can put the mouse to sleep at once: that's a success with a warning, and nothing goes back
 class DropsOff(Fake):
     "accepts the sleep timer write, then answers everything with this status"
@@ -489,10 +490,10 @@ class DropsOff(Fake):
         self.off = (body[6], body[7]) == (7, 0x03)
 SLEPT = "Saved. The mouse went to sleep straight away because the new sleep time is shorter than it has been idle; move it to wake it."
 def backend(f, argv):
-    real_hid, real_node = c.Hid, c.control_node
-    c.Hid, c.control_node = (lambda path: f), (lambda: "/dev/fake")
+    real_hid, real_node = c.Hid, c.control_nodes
+    c.Hid, c.control_nodes = (lambda path: f), (lambda: {"hyperspeed": "/dev/fake"})
     try: return c.main(argv)
-    finally: c.Hid, c.control_node = real_hid, real_node
+    finally: c.Hid, c.control_nodes = real_hid, real_node
 f = DropsOff(900); r = backend(f, ["set-idle", "300"])
 assert r == {"ok": True, "connected": True, "permission": True, "idle": 300, "warning": SLEPT} and f.idle == 300, r
 f = DropsOff(900); f.mem[(1, 0, SIDE1)] = f.mem[(0, 0, SIDE1)] = c.encode(ctrl1, SIDE1); f.poll, f.dpi = 2, 999; c.set_loaded("x"); c.set_chosen({SIDE1})
@@ -623,8 +624,8 @@ with c.mouse_lock():
 with c.mouse_lock(): pass  # released, and an existing file opens fine
 os.chmod(c.lock_path(), 0o444)
 with c.mouse_lock(): pass  # a lock file this user can't write still works
-c.control_node = lambda: "/dev/hidraw-test"; c.Hid = lambda path: Fake()
-assert c.main(["state"])["ok"]; c.Hid, c.control_node = real_hid, real_node
+c.control_nodes = lambda: {"hyperspeed": "/dev/hidraw-test"}; c.Hid = lambda path: Fake()
+assert c.main(["state"])["ok"]; c.Hid, c.control_nodes = real_hid, real_node
 # a failure at the last step of an all-or-nothing change also puts back the polling rate before it
 class IdleStuck(Fake):
     def set_report(self, body):
@@ -819,12 +820,12 @@ def slow_update(**values):
     select.select([], [], [], 0.02)  # time.sleep is stubbed out; this leaves room for a race if the lock isn't there
     real_update(**values)
 os.remove(c.state_path()); f.battery = raw(10); answers = []
-real_hid, real_node = c.Hid, c.control_node
-c.Hid, c.control_node, c.update_state = (lambda path: f), (lambda: "/dev/fake"), slow_update
+real_hid, real_node = c.Hid, c.control_nodes
+c.Hid, c.control_nodes, c.update_state = (lambda path: f), (lambda: {"hyperspeed": "/dev/fake"}), slow_update
 threads = [threading.Thread(target=lambda: answers.append(c.main(["battery"]))) for _ in range(6)]
 for t in threads: t.start()
 for t in threads: t.join()
-c.Hid, c.control_node, c.update_state = real_hid, real_node, real_update
+c.Hid, c.control_nodes, c.update_state = real_hid, real_node, real_update
 assert len(answers) == 6 and all(a["ok"] and a["battery"] == 10 for a in answers), answers
 assert sum(a["alert"] for a in answers) == 1, answers
 # only the top buttons can be the Hypershift key, and only the side buttons have a layer to edit: refused plainly, with nothing written
@@ -887,7 +888,7 @@ for bad in (0, 6):
     except c.Err: pass
 # a button action arrives on stdin, bounded in time and size, and a stuck run stops itself
 import subprocess
-real_hid, real_node = c.Hid, c.control_node; f = Fake(); c.Hid, c.control_node = (lambda path: f), (lambda: "/dev/fake")
+real_hid, real_node = c.Hid, c.control_nodes; f = Fake(); c.Hid, c.control_nodes = (lambda path: f), (lambda: {"hyperspeed": "/dev/fake"})
 def over_stdin(text, argv=("set-button", str(SIDE1), "0")):
     r, w = os.pipe(); saved = os.dup(0); os.dup2(r, 0); os.close(r)
     if text is not None: os.write(w, text.encode())
@@ -898,11 +899,62 @@ real_wait = c.INPUT_WAIT; c.INPUT_WAIT = 0
 assert "didn't send" in over_stdin(None)["error"], "a panel that never writes doesn't hang it"; c.INPUT_WAIT = real_wait
 assert "Bad request" in over_stdin("{bad")["error"] and "Bad request" in over_stdin("\xff")["error"]
 assert "Bad request" in over_stdin("x" * 9000)["error"], "only a bounded amount is read"
-c.Hid, c.control_node = real_hid, real_node
+c.Hid, c.control_nodes = real_hid, real_node
+# the Naga V2 Pro: its own buttons, all three side plates, two copies per DPI level, and its own layouts and notes
+c.write_json(c.state_path(), {}); c.use_model("pro"); f = Fake(); st = c.get_state(f)
+ids = [b["id"] for b in st["buttons"]]
+assert st["mouse"] == "pro" and st["mouseName"] == "Naga V2 Pro" and len(ids) == 26 and 0x0b not in ids and 0x0c not in ids
+assert {b["plate"] for b in st["buttons"] if b["id"] in range(0x50, 0x56)} == {6} and [p["buttons"] for p in st["plates"]] == [12, 6, 2]
+assert c.describe(c.FACTORY[0x04])["label"] == "Back" and c.describe(c.FACTORY[0x55])["label"] == "6" and not f.writes
+c.set_button(f, 0x50, 0, ctrl1); assert f.mem[(1, 0, 0x50)] == f.mem[(0, 0, 0x50)] == c.encode(ctrl1, 0x50)
+try: c.set_button(f, 0x0b, 0, ctrl1); assert 0, "the Pro has no top buttons"
+except c.Err: pass
+try: c.set_button(f, 0x34, 0, {"kind": "hypershift"}); assert 0, "tilt can't hold Hypershift"
+except c.Err: pass
+assert {b["id"] for b in st["buttons"] if b["canBeKey"]} == set(range(0x40, 0x4c)) | set(range(0x50, 0x56)) | {0x04, 0x05, 0x03}
+assert c.FACTORY[0x6d] == c.FACTORY[0x60] == c.FACTORY[0x0e] == c.DISABLED, "factory leaves the DPI and profile buttons off"
+c.set_button(f, 0x4b, 0, {"kind": "hypershift"}); assert f.mem[(1, 1, 0x4b)] == c.HYPERSHIFT
+c.set_button(f, 0x4b, 0, c.describe(c.FACTORY[0x4b]) | {"kind": "factory"}); assert f.mem[(1, 0, 0x4b)] == c.FACTORY[0x4b]
+c.set_button(f, 0x04, 0, {"kind": "hypershift"}); c.set_button(f, 0x51, 1, {"kind": "media", "value": "mute"})
+assert f.mem[(1, 1, 0x51)] == bytes([0x0a, 2, 0, 0xe2, 0, 0, 0]) and f.mem[(1, 0, 0x51)] == c.FACTORY[0x51]
+c.set_dpi(f, [500, 1000, 2000, 4000, 8000], 2)
+assert all(r[1:3] == r[3:5] and r[5:7] == b"\0\0" for r in f.stage_recs) and f.dpi == 1000, "two copies, then zeros"
+c.apply_preset(f, "wow"); assert all(f.mem[(1, 0, b + i)] == c.key_rec(0x1e + i, 1) for b in (0x40, 0x50) for i in range(6))
+c.store_layouts({}); c.save_layout(f, "pro one"); saved = c.load_layouts()["pro one"]
+assert saved["model"] == "pro" and "0x50" in saved["buttons"] and c.layout_names() == ["pro one"]
+assert "pro.chosen" in c.read_state() and c.get_chosen() == {0x51}
+c.apply_preset(f, "factory"); c.apply_layout(f, "pro one"); assert c.get_state(f)["loadedLayout"] == "pro one"
+c.use_model("hyperspeed"); h = Fake()
+assert c.layout_names() == [] and c.get_loaded() == "" and c.get_chosen() == set(), "the HyperSpeed doesn't see the Pro's layouts or notes"
+for bad in (lambda: c.apply_layout(h, "pro one"), lambda: c.delete_layout("pro one"), lambda: c.save_layout(h, "pro one")):
+    try: bad(); assert 0
+    except c.Err: pass
+assert not h.writes and "pro one" in c.load_layouts()
+c.save_layout(h, "hs"); assert "model" not in c.load_layouts()["hs"], "HyperSpeed layouts keep their old shape"
+c.use_model("pro"); assert c.layout_names() == ["pro one"]; c.use_model("hyperspeed")
+# the dock is found as the Pro, both mice can be plugged in, and the panel picks between them
+c.glob = FakeGlob; hidraw("hidraw7", "8-1:1.0", "0003:00001532:000000A4"); hidraw("hidraw8", "8-1:1.1", "0003:00001532:000000A4")
+assert c.control_nodes() == {"hyperspeed": "/dev/hidraw4", "pro": "/dev/hidraw7"}; c.glob = real_glob
+mice = {"/dev/hs": Fake()}; c.use_model("pro"); mice["/dev/pro"] = Fake(); c.use_model("hyperspeed")
+real_hid, real_node = c.Hid, c.control_nodes
+c.Hid, c.control_nodes = (lambda path: mice[path]), (lambda: {"hyperspeed": "/dev/hs", "pro": "/dev/pro"})
+c.update_state(mouse=None)
+r = c.main(["state"]); assert r["mouse"] == "hyperspeed" and [m["id"] for m in r["mice"]] == ["hyperspeed", "pro"], "first found when none picked"
+r = c.main(["select-mouse", "pro"]); assert r["ok"] and r["mouse"] == "pro" and len(r["buttons"]) == 26
+assert c.main(["state"])["mouse"] == "pro" and c.main(["battery"])["mouse"] == "pro", "the pick sticks"
+assert not c.main(["select-mouse", "mx"])["ok"]
+class Sleeping(Fake):
+    def get_report(self): return bytes([4]) + self.last[1:]
+c.use_model("hyperspeed"); mice["/dev/hs"] = Sleeping(); c.update_state(mouse="hyperspeed")
+r = c.main(["state"]); assert not r["ok"] and [m["id"] for m in r["mice"]] == ["hyperspeed", "pro"], "a sleeping mouse still lists both, so the panel can switch"
+assert c.main(["select-mouse", "pro"])["ok"]
+c.control_nodes = lambda: {"hyperspeed": "/dev/hs"}; assert c.main(["state"])["mouse"] == "hyperspeed", "falls back when the pick is unplugged"
+c.control_nodes = lambda: {}; r = c.main(["state"]); assert r["mouse"] == "pro" and r["layouts"] == ["pro one"], "unplugged lists the last mouse's layouts"
+c.Hid, c.control_nodes = real_hid, real_node; c.use_model("hyperspeed"); c.update_state(mouse=None)
 # run as a real program, with the mouse search removed so this can never reach a real mouse
 source = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "naga_ctl.py")).read()
 assert "MAX_RUN = 180" in source and 'if __name__ == "__main__":' in source
-source = source.replace('if __name__ == "__main__":', 'control_node = lambda: None\nif __name__ == "__main__":')
+source = source.replace('if __name__ == "__main__":', 'control_nodes = lambda: {}\nif __name__ == "__main__":')
 out = subprocess.run([sys.executable, "-I", "-c", source, "set-button", str(SIDE1), "0"], input=json.dumps(ctrl1) + "\n", capture_output=True, text=True, timeout=30)
 assert out.returncode == 0 and json.loads(out.stdout)["connected"] is False, out
 with c.mouse_lock():

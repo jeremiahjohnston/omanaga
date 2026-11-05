@@ -10,7 +10,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Lint
-        run: pip install pyflakes && python3 -m pyflakes naga_ctl.py tools/probe.py tests/test_ctl.py
+        run: pip install pyflakes && python3 -m pyflakes naga_ctl.py tools/probe.py tools/probe_pro.py tests/test_ctl.py
       - name: Backend tests
         run: python3 -I tests/test_ctl.py  # never with -O, which strips the asserts these rely on
       - name: Shell scripts

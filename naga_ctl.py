@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Backend for the Naga V2 HyperSpeed plugin. Talks to the receiver over /dev/hidraw, prints one JSON object.
+"""Backend for the Omanaga plugin: the Naga V2 HyperSpeed on its dongle and the Naga V2 Pro on its Mouse Dock Pro.
+Talks to the receiver over /dev/hidraw, prints one JSON object.
 
-Commands: state | battery | save-layout <name> | apply-layout <name> | delete-layout <name> | set-button <id> <layer> (the action as JSON on stdin) | set-dpi <d1,d2,d3,d4,d5> <active|keep> | set-current-dpi <dpi>
+Commands: state | battery | select-mouse <hyperspeed|pro> | save-layout <name> | apply-layout <name> | delete-layout <name> | set-button <id> <layer> (the action as JSON on stdin) | set-dpi <d1,d2,d3,d4,d5> <active|keep> | set-current-dpi <dpi>
           set-poll <hz> | set-idle <seconds> | preset <factory|wow>
 Every write is read back, and anything that fails is put back as it was, or the error says what couldn't be."""
 import contextlib, fcntl, functools, glob, json, os, select, signal, stat, sys, tempfile, time
 
-VID, PID, TXN, LEN = 0x1532, 0x00b4, 0x1f, 91
+VID, TXN, LEN = 0x1532, 0x1f, 91
 GET = (3 << 30) | (LEN << 16) | (ord('H') << 8) | 0x07
 SET = (3 << 30) | (LEN << 16) | (ord('H') << 8) | 0x06
 STORED, ACTIVE = 1, 0
@@ -17,13 +18,8 @@ MAX_RUN = 180  # seconds before a run stops itself, far beyond the slowest real 
 STATUS = {3: "The mouse rejected the command.", 4: "The mouse didn't answer. Move it to wake it, then try again.",
           5: "The mouse doesn't support that command."}
 
-# Left, right and the wheel are deliberately absent: they can't be edited, so the mouse always keeps a working click.
-CONTROLS = {**{0x40 + i: f"Side {i + 1}" for i in range(12)},
-            0x0b: "Top button 1", 0x0c: "Top button 2", 0x03: "Middle click", 0x34: "Tilt left", 0x35: "Tilt right"}
-# The mouse stores a Hypershift key on any button, but only the top two work as one when held (tested by hand).
-KEY_BUTTONS = {0x0b, 0x0c}
-SIDE_BUTTONS = {0x40 + i for i in range(12)}
-
+# Left, right and the wheel are deliberately absent from every model: they can't be edited, so the mouse always keeps a working click.
+# CONTROLS, KEY_BUTTONS, SIDE_BUTTONS, FACTORY and STAGE_COPIES are the selected model's, set by use_model.
 KEYS = {**{chr(97 + i): 0x04 + i for i in range(26)},
         **{str((i + 1) % 10): 0x1e + i for i in range(10)},
         "Enter": 0x28, "Esc": 0x29, "Backspace": 0x2a, "Tab": 0x2b, "Space": 0x2c, "-": 0x2d, "=": 0x2e, "[": 0x2f,
@@ -55,11 +51,59 @@ ATTEMPTS, LINK_ATTEMPTS = 3, 5  # a status 3 can take a few sends to clear, but 
 def key_rec(usage, mods=0):
     return bytes([0x02, 0x02, mods, usage, 0, 0, 0])
 
-FACTORY = {**{0x40 + i: bytes([0x02, 0x01, 0x00, u, 0, 0, 0]) for i, u in enumerate(
-                  [0x1e, 0x1f, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x2d, 0x2e])},
-           0x0b: bytes([0x06, 1, 1, 0, 0, 0, 0]), 0x0c: bytes([0x06, 1, 2, 0, 0, 0, 0]),
-           0x03: bytes([0x01, 1, 3, 0, 0, 0, 0]),
-           0x34: bytes([0x0e, 1, 0x68, 0, 0x14, 0, 0]), 0x35: bytes([0x0e, 1, 0x69, 0, 0x14, 0, 0])}
+def factory_sides(first, count):
+    """Side buttons ship as 1 to 9, 0, - and =, in order."""
+    return {first + i: bytes([0x02, 0x01, 0x00, u, 0, 0, 0]) for i, u in enumerate(
+        [0x1e, 0x1f, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x2d, 0x2e][:count])}
+
+COMMON_FACTORY = {0x03: bytes([0x01, 1, 3, 0, 0, 0, 0]),
+                  0x34: bytes([0x0e, 1, 0x68, 0, 0x14, 0, 0]), 0x35: bytes([0x0e, 1, 0x69, 0, 0x14, 0, 0])}
+COMMON_CONTROLS = {0x03: "Middle click", 0x34: "Tilt left", 0x35: "Tilt right"}
+
+# Each model as the probe found it (tools/probe.py, tools/probe_pro.py). Both speak the same protocol on interface 0
+# with transaction ID 0x1f; they differ in which buttons exist and how many copies of each DPI a level holds.
+MODELS = {
+    "hyperspeed": {
+        "name": "Naga V2 HyperSpeed", "pids": (0x00b4,), "battery": "It takes one AA.",
+        "controls": {**{0x40 + i: f"Side {i + 1}" for i in range(12)},
+                     0x0b: "Top button 1", 0x0c: "Top button 2", **COMMON_CONTROLS},
+        # The mouse stores a Hypershift key on any button, but only the top two work as one when held (tested by hand).
+        "key_buttons": {0x0b, 0x0c},
+        "side_buttons": {0x40 + i for i in range(12)},
+        "factory": {**factory_sides(0x40, 12), 0x0b: bytes([0x06, 1, 1, 0, 0, 0, 0]),
+                    0x0c: bytes([0x06, 1, 2, 0, 0, 0, 0]), **COMMON_FACTORY},
+        "stage_copies": 3,  # the factory stages repeat the DPI in a third slot
+        "plates": {12: "12 buttons"},
+    },
+    "pro": {
+        # 0x00a4 is the Mouse Dock Pro: the mouse answers through it. It keeps a map for every side plate at once,
+        # whichever is fitted: 0x40-0x4b for the 12-button plate, 0x50-0x55 for the 6 and 0x04-0x05 for the 2.
+        # The two buttons behind the wheel and the one underneath ship as DPI and profile controls, but their factory
+        # records weren't captured, so a factory reset turns them off rather than guessing.
+        "name": "Naga V2 Pro", "pids": (0x00a4,), "battery": "Put it on the dock to charge.",
+        "controls": {**{0x40 + i: f"Side {i + 1}" for i in range(12)},
+                     **{0x50 + i: f"Side {i + 1} (6-button plate)" for i in range(6)},
+                     0x04: "Side 1 (2-button plate)", 0x05: "Side 2 (2-button plate)", **COMMON_CONTROLS,
+                     0x6d: "Top button 1", 0x60: "Top button 2", 0x0e: "Bottom button"},
+        # Unlike the HyperSpeed, a held Hypershift key works on the side buttons and the wheel click (Side 12 and the
+        # wheel click tested by hand; the other side buttons are the same kind of control).
+        "key_buttons": {0x40 + i for i in range(12)} | {0x50 + i for i in range(6)} | {0x04, 0x05, 0x03},
+        "side_buttons": {0x40 + i for i in range(12)} | {0x50 + i for i in range(6)} | {0x04, 0x05},
+        "factory": {**factory_sides(0x40, 12), **factory_sides(0x50, 6), 0x04: bytes([0x01, 1, 4, 0, 0, 0, 0]),
+                    0x05: bytes([0x01, 1, 5, 0, 0, 0, 0]), **COMMON_FACTORY, 0x6d: DISABLED, 0x60: DISABLED, 0x0e: DISABLED},
+        "stage_copies": 2,  # the rest of each level reads back as zeros
+        "plates": {12: "12 buttons", 6: "6 buttons", 2: "2 buttons"},
+    },
+}
+PLATE_BUTTONS = {12: {0x40 + i for i in range(12)}, 6: {0x50 + i for i in range(6)}, 2: {0x04, 0x05}}
+
+def use_model(key):
+    global MODEL, CONTROLS, KEY_BUTTONS, SIDE_BUTTONS, FACTORY, STAGE_COPIES
+    m = MODELS[key]
+    MODEL, CONTROLS, KEY_BUTTONS, SIDE_BUTTONS, FACTORY, STAGE_COPIES = (
+        key, m["controls"], m["key_buttons"], m["side_buttons"], m["factory"], m["stage_copies"])
+
+use_model("hyperspeed")
 FACTORY_DPI, FACTORY_ACTIVE, FACTORY_POLL, FACTORY_IDLE = [400, 800, 1600, 3200, 6400], 3, 1000, 300
 
 class Err(Exception):
@@ -259,7 +303,7 @@ def set_button(dev, bid, layer, action):
         raise Err("Only the side buttons can have a Hypershift action.")
     rec = encode(action, bid)
     if layer == 0 and rec == HYPERSHIFT and bid not in KEY_BUTTONS:
-        raise Err("Only Top button 1 and Top button 2 can be the Hypershift key.")
+        raise Err("Only " + " and ".join(CONTROLS[b] for b in sorted(KEY_BUTTONS, key=list(CONTROLS).index)) + " can be the Hypershift key.")
     records = read_buttons(dev)
     normal = {b: records[(b, 0)] for b in CONTROLS}
     shifted = {b: records[(b, 1)] for b in CONTROLS}
@@ -291,7 +335,7 @@ def get_stages(dev):
 def write_stages(dev, dpis, active):
     body = bytes([1, active, len(dpis)])
     for i, d in enumerate(dpis):
-        body += bytes([i + 1]) + d.to_bytes(2, "big") * 3  # the factory stages repeat the DPI in a third slot
+        body += bytes([i + 1]) + (d.to_bytes(2, "big") * STAGE_COPIES).ljust(6, b"\0")
     transact(dev, 4, 0x06, 0x26, body.ljust(0x26, b"\0"))
 
 def get_dpi(dev):
@@ -399,8 +443,10 @@ def apply_preset(dev, name):
     normal, shifted = ({b: records[(b, l)] for b in CONTROLS} for l in (0, 1))
     chosen = get_chosen()
     changes = []
-    for i in range(6):
-        changes += normal_changes(normal, shifted, chosen, 0x40 + i, key_rec(0x1e + i, MODS["ctrl"]))
+    for first in (0x40, 0x50):
+        for i in range(6):
+            if first + i in CONTROLS:
+                changes += normal_changes(normal, shifted, chosen, first + i, key_rec(0x1e + i, MODS["ctrl"]))
     records = commit(dev, changes, records)
     set_loaded("")
     forget_chosen(changes)
@@ -432,6 +478,17 @@ def read_json(path):
     if len(text) > MAX_DATA_FILE:
         raise ValueError("too large")
     return json.loads(text)
+
+def layout_model(layout):
+    """Layouts saved before there were two models are the HyperSpeed's."""
+    return layout.get("model", "hyperspeed") if isinstance(layout, dict) else "hyperspeed"
+
+def model_layouts(data):
+    """This model's layouts. The button IDs differ between models, so one model's layout can't load on another."""
+    return {n: l for n, l in data.items() if layout_model(l) == MODEL}
+
+def layout_names():
+    return sorted(model_layouts(load_layouts()), key=str.lower)
 
 def load_layouts():
     try:
@@ -487,30 +544,37 @@ def update_state(**values):
     except OSError:
         pass  # the settings are on the mouse either way, so a missing note isn't worth failing over
 
+def skey(name):
+    """Notes are kept per model. The HyperSpeed keeps the names it had before there were two."""
+    return name if MODEL == "hyperspeed" else f"{MODEL}.{name}"
+
 def get_loaded():
     """The name of the layout last loaded."""
-    name = read_state().get("loaded")
+    name = read_state().get(skey("loaded"))
     return name if isinstance(name, str) else ""
 
 def set_loaded(name):
-    update_state(loaded=name)
+    update_state(**{skey("loaded"): name})
 
 def get_chosen():
     """The buttons whose Hypershift entry the user set. The mouse can't tell a deliberate Disabled from one never set."""
-    chosen = read_state().get("chosen")
+    chosen = read_state().get(skey("chosen"))
     return {b for b in CONTROLS if b in chosen} if isinstance(chosen, list) else set()
 
 def set_chosen(chosen):
     if chosen != get_chosen():
-        update_state(chosen=sorted(chosen))
+        update_state(**{skey("chosen"): sorted(chosen)})
 
 def forget_chosen(changes):
     """A normal-layer change that also wrote the Hypershift entry leaves it following the normal layer."""
     set_chosen(get_chosen() - {b for b, l, _ in changes if l == 1})
 
 def layout_of(records, stages, active, dpi, poll, idle):
-    return {"buttons": {f"{b:#04x}": [records[(b, 0)].hex(), records[(b, 1)].hex()] for b in CONTROLS},
-            "stages": stages, "activeStage": active, "dpi": dpi, "poll": poll, "idle": idle}
+    layout = {"buttons": {f"{b:#04x}": [records[(b, 0)].hex(), records[(b, 1)].hex()] for b in CONTROLS},
+              "stages": stages, "activeStage": active, "dpi": dpi, "poll": poll, "idle": idle}
+    if MODEL != "hyperspeed":  # so a HyperSpeed layout saved before there were two stays byte for byte the same
+        layout["model"] = MODEL
+    return layout
 
 def snapshot(dev, records=None):
     """Everything a layout restores, read from the mouse."""
@@ -561,6 +625,9 @@ def save_layout(dev, name):
     if not name or len(name) > 40:
         raise Err("Layout names must be 1 to 40 characters.")
     data = load_layouts()
+    if name in data and layout_model(data[name]) != MODEL:
+        other = MODELS.get(layout_model(data[name]), {}).get("name", "another mouse")
+        raise Err(f"There's already a layout called {name} for the {other}. Pick another name.")
     records = read_buttons(dev)
     data[name] = {**snapshot(dev, records), "chosen": sorted(get_chosen())}
     try:
@@ -571,7 +638,7 @@ def save_layout(dev, name):
     return records
 
 def apply_layout(dev, name):
-    data = load_layouts()
+    data = model_layouts(load_layouts())
     if name not in data:
         raise Err(f"No saved layout called {name}.")
     records = apply_snapshot(dev, data[name])
@@ -581,7 +648,7 @@ def apply_layout(dev, name):
 
 def delete_layout(name):
     data = load_layouts()
-    if name not in data:
+    if name not in model_layouts(data):
         raise Err(f"No saved layout called {name}.")
     del data[name]
     store_layouts(data)
@@ -594,11 +661,11 @@ def get_battery(dev):
 def battery_alert(level):
     """True only the first time the battery is low in a given drop. Kept in state.json, under the mouse lock, because
     the panel runs once per screen and restarts with the shell, and all of those together should alert once."""
-    alerted = read_state().get("batteryAlerted") is True
+    alerted = read_state().get(skey("batteryAlerted")) is True
     if level > BATTERY_REARM and alerted:
-        update_state(batteryAlerted=False)
+        update_state(**{skey("batteryAlerted"): False})
     elif level <= LOW_BATTERY and not alerted:
-        update_state(batteryAlerted=True)
+        update_state(**{skey("batteryAlerted"): True})
         return True
     return False
 
@@ -617,11 +684,13 @@ def get_state(dev, records=None):
     records = records or read_buttons(dev)
     for bid, name in CONTROLS.items():
         state["buttons"].append({"id": bid, "name": name, "normal": describe(records[(bid, 0)]), "hypershift": describe(records[(bid, 1)]),
-                                 "canBeKey": bid in KEY_BUTTONS, "layerEditable": bid in SIDE_BUTTONS})
+                                 "canBeKey": bid in KEY_BUTTONS, "layerEditable": bid in SIDE_BUTTONS,
+                                 "plate": next((p for p, ids in PLATE_BUTTONS.items() if bid in ids), 0)})
+    state.update(mouse_info())
     state["dpiLevel"] = dpi_level(stages, active, state["dpi"])
     state["hasHypershift"] = any(b["normal"]["kind"] == "hypershift" for b in state["buttons"])
     try:
-        saved = load_layouts()
+        saved = model_layouts(load_layouts())
         current = layout_of(records, stages, active, state["dpi"], state["poll"], state["idle"])
         state["layouts"] = sorted(saved, key=str.lower)
         loaded = get_loaded()
@@ -631,23 +700,41 @@ def get_state(dev, records=None):
         state["layouts"], state["loadedLayout"], state["layoutsError"] = [], "", str(e)
     return state
 
-def control_node():
+def control_nodes():
+    """Every supported receiver's control interface, as {model: node}, the first of each model found."""
+    found = {}
     for d in sorted(glob.glob("/sys/class/hidraw/hidraw*")):
         try:
             with open(d + "/device/uevent") as f:
                 ue = f.read()
         except OSError:  # unplugged while looking
             continue
-        if f"HID_ID=0003:{VID:08X}:{PID:08X}" in ue and os.path.realpath(d + "/device").split("/")[-2].endswith(":1.0"):
-            return "/dev/" + os.path.basename(d)
-    return None
+        if not os.path.realpath(d + "/device").split("/")[-2].endswith(":1.0"):
+            continue
+        for key, m in MODELS.items():
+            if key not in found and any(f"HID_ID=0003:{VID:08X}:{pid:08X}" in ue for pid in m["pids"]):
+                found[key] = "/dev/" + os.path.basename(d)
+    return found
+
+PRESENT = []  # the models plugged in, in MODELS order, set by talk
+
+def chosen_mouse(present):
+    """The mouse picked last in the panel if it's plugged in, otherwise the first one that is."""
+    picked = read_state().get("mouse")
+    return picked if picked in present else next((k for k in MODELS if k in present), None)
+
+def mouse_info():
+    m = MODELS[MODEL]
+    return {"mouse": MODEL, "mouseName": m["name"], "batteryNote": m["battery"],
+            "mice": [{"id": k, "name": MODELS[k]["name"]} for k in PRESENT],
+            "plates": [{"buttons": n, "name": label} for n, label in m["plates"].items()]}
 
 def run(dev, argv):
     cmd, args = argv[0], argv[1:]
     if cmd == "battery":
         level = get_battery(dev)
-        return {"ok": True, "connected": True, "permission": True, "battery": level, "alert": battery_alert(level)}
-    if cmd == "state":
+        return {"ok": True, "connected": True, "permission": True, "battery": level, "alert": battery_alert(level), **mouse_info()}
+    if cmd in ("state", "select-mouse"):
         return get_state(dev)
     commands = {  # the ones that read the button records return them, so the refresh needn't read them again
         "set-button": lambda a: set_button(dev, int(a[0], 0), int(a[1]), json.loads(a[2])),
@@ -675,7 +762,7 @@ def run(dev, argv):
             answer["idle"] = dev.idle_set
         if cmd in ("save-layout", "delete-layout"):
             with contextlib.suppress(Err):
-                answer["layouts"] = sorted(load_layouts(), key=str.lower)
+                answer["layouts"] = layout_names()
         return answer
 
 def lock_owner():
@@ -751,19 +838,29 @@ def main(argv):
 
 def without_mouse(argv, answer):
     """Saved layouts live on this computer, so listing and deleting them don't need the mouse."""
+    answer.update(mouse_info())
     try:
         if argv[0] == "delete-layout":
             delete_layout(argv[1])
             answer["ok"] = True
             del answer["error"]
-        answer["layouts"] = sorted(load_layouts(), key=str.lower)
+        answer["layouts"] = layout_names()
     except Err as e:
         answer["error"] = str(e)
     return answer
 
 def talk(argv):
-    node = control_node()
-    no_dongle = {"ok": False, "connected": False, "permission": True, "error": "Mouse dongle not found."}
+    nodes = control_nodes()
+    PRESENT[:] = [k for k in MODELS if k in nodes]
+    if argv[0] == "select-mouse":
+        if len(argv) != 2 or argv[1] not in MODELS:
+            raise Err("Unknown mouse.")
+        update_state(mouse=argv[1])
+    key = chosen_mouse(nodes)
+    last = read_state().get("mouse")  # with nothing plugged in, saved layouts are listed for the mouse used last
+    use_model(key or (last if last in MODELS else "hyperspeed"))
+    node = nodes.get(key)
+    no_dongle = {"ok": False, "connected": False, "permission": True, "error": "Mouse receiver not found."}
     if not node:
         return without_mouse(argv, no_dongle)
     try:
@@ -774,10 +871,8 @@ def talk(argv):
         return without_mouse(argv, no_dongle)
     try:
         return run(dev, argv)
-    except Err as e:
-        return {"ok": False, "connected": True, "permission": True, "error": str(e)}
-    except OSError as e:
-        return {"ok": False, "connected": True, "permission": True, "error": error_text(e)}
+    except (Err, OSError) as e:  # which mice there are goes along, so the panel can switch away from one that's asleep
+        return {"ok": False, "connected": True, "permission": True, "error": error_text(e), **mouse_info()}
 
 if __name__ == "__main__":
     signal.alarm(MAX_RUN)  # the default action ends the program, which the panel treats as no answer

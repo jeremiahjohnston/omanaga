@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.0
+
+### Added
+
+- Support for the Razer Naga V2 Pro on its Mouse Dock Pro (USB 1532:00a4): buttons, Hypershift, DPI levels, polling, sleep, battery and layouts, as for the HyperSpeed. The panel switches between the 12, 6 and 2-button side plates, each of which the mouse maps separately.
+- With both mice plugged in, the panel has a switch next to the title, and remembers the pick in `state.json`. It stays usable when the picked mouse is asleep.
+- `tools/probe_pro.py`, a read-only probe of the V2 Pro, needing `sudo`.
+
+### Changed
+
+- The udev rule also covers the Mouse Dock Pro, so run `setup.sh` again after updating.
+- Saved layouts record which mouse they came from, and only load on that mouse. Existing layouts are the HyperSpeed's and are unchanged on disk.
 ## 0.4.0
 
 ### Changed

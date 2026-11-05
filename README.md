@@ -1,13 +1,19 @@
 # Omanaga
 
-An Omarchy bar plugin for configuring the Razer Naga V2 HyperSpeed on Linux. It saves settings to the mouse itself, so they keep working with no software running.
+An Omarchy bar plugin for configuring Razer Naga mice on Linux. It saves settings to the mouse itself, so they keep working with no software running.
 
-**It supports one mouse: the Razer Naga V2 HyperSpeed, on its 2.4 GHz USB dongle.**
+**It supports two mice:**
+
+- **Razer Naga V2 HyperSpeed**, on its 2.4 GHz USB dongle.
+- **Razer Naga V2 Pro**, on its Razer Mouse Dock Pro. The mouse keeps a separate map for each side plate (12, 6 and 2 buttons), and the panel shows one plate at a time. Any side button or the wheel click can be its Hypershift key. The two buttons behind the wheel and the one underneath can be mapped too, and a factory reset turns them off. Over its cable or a separate HyperSpeed dongle it isn't detected yet.
+
+With both plugged in, buttons next to the title switch between them, and the panel remembers the pick. Saved layouts belong to the mouse they were saved from, because the two have different buttons.
 
 - Bluetooth doesn't work. Settings can't be changed over it.
 - Other Razer mice don't work.
-- Macros don't work, because the mouse can't store them. There are no per-app profiles either, for the same reason.
-- Lighting doesn't work, because the mouse has no customizable lighting.
+- Macros don't work, because the mice can't store them. There are no per-app profiles either, for the same reason.
+- Lighting isn't supported. The HyperSpeed has no customizable lighting, and the V2 Pro's isn't supported yet.
+- The V2 Pro's onboard profiles aren't supported: the panel edits profile 1, which is the one the mouse was using when it was probed. If the mouse is switched to another profile, changes made here won't show until it is switched back.
 - The scroll mode button under the wheel can't be programmed.
 
 Unofficial and not affiliated with Razer.
@@ -37,7 +43,7 @@ It checks that `70-omanaga.rules` is exactly what it expects, and refuses to con
 2. `rm -f` removes `/etc/udev/rules.d/70-naga-control.rules`, if an older version installed it.
 3. `udevadm control --reload-rules` and `udevadm trigger --subsystem-match=hidraw --action=change` apply the rule.
 
-The rule gives the person logged in at the seat access to the dongle's control interface, through `uaccess`. It doesn't open the device to other accounts. Replug the dongle if the panel still asks for setup.
+The rule gives the person logged in at the seat access to the control interface of the HyperSpeed's dongle and the V2 Pro's dock, through `uaccess`. It doesn't open the device to other accounts. Replug the dongle or dock if the panel still asks for setup.
 
 The plugin itself runs as your user. Saving a setting also needs no root.
 

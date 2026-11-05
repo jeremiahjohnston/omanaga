@@ -1,4 +1,5 @@
-# Lets the person logged in at this seat configure the Naga V2 HyperSpeed: its receiver's control interface only.
+# Lets the person logged in at this seat configure the Naga V2 HyperSpeed and Naga V2 Pro: their receivers' control interfaces only.
 # Two steps because udev requires all ATTRS in one rule to match the same parent device, and these live on different ones.
 SUBSYSTEM=="hidraw", ATTRS{idVendor}=="1532", ATTRS{idProduct}=="00b4", ENV{OMANAGA_CONTROL}="1"
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="1532", ATTRS{idProduct}=="00a4", ENV{OMANAGA_CONTROL}="1"
 SUBSYSTEM=="hidraw", ENV{OMANAGA_CONTROL}=="1", ATTRS{bInterfaceNumber}=="00", TAG+="uaccess"

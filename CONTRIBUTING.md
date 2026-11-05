@@ -2,7 +2,7 @@
 
 These are notes for anyone working on the plugin, people and AI agents alike. They are deliberately not in a `CLAUDE.md`: `omarchy plugin add` clones the whole repo, and marketplace reviewers object to instructions that agents would pick up automatically in an installed plugin's folder.
 
-An Omarchy bar plugin that configures the Razer Naga V2 HyperSpeed on Linux, with no OpenRazer or kernel module. Settings are stored on the mouse.
+An Omarchy bar plugin that configures the Razer Naga V2 HyperSpeed and Naga V2 Pro on Linux, with no OpenRazer or kernel module. Settings are stored on the mouse.
 
 `Panel.qml` is the UI. It runs `naga_ctl.py`, which talks to the dongle over hidraw and prints one JSON object per command. Saved layouts and `state.json` live in `~/.local/share/omanaga/` (owner-only).
 
