@@ -1307,7 +1307,10 @@ Panel {
                       onClicked: root.factoryClicked()
                     }
                   }
-                  Info { text: "The mouse has no lighting to set. Macros aren't included because the mouse can't store them." }
+                  Info {
+                    text: root.st.mouse === "pro" ? "Lighting isn't supported yet. Macros aren't included because the mouse can't store them."
+                      : "The mouse has no lighting to set. Macros aren't included because the mouse can't store them."
+                  }
                 }
               }
             }
