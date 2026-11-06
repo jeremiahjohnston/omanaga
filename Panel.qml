@@ -67,13 +67,21 @@ Panel {
   property string confirmingDelete: ""
   property string confirmingReplace: ""
   readonly property int lowBattery: 15
+  // Which side plate is shown. Only the Naga V2 Pro has more than one, and it keeps a map for each.
+  property int plate: 12
+  readonly property bool hasTopButtons: buttonById(0x0b) !== null
+  // The HyperSpeed's top buttons, or the V2 Pro's two behind the wheel.
+  readonly property var topIds: hasTopButtons ? [0x0b, 0x0c] : [0x6d, 0x60]
+  // Kept from every reply, even a failed one, so a sleeping mouse can still be switched away from.
+  property var mice: []
+  property string currentMouse: ""
 
   readonly property var selectedButton: {
     var b = st.buttons || []
     for (var i = 0; i < b.length; i++) if (b[i].id === selectedId) return b[i]
     return null
   }
-  readonly property var sideButtons: (st.buttons || []).filter(function(b) { return b.id >= 0x40 })
+  readonly property var sideButtons: (st.buttons || []).filter(function(b) { return b.plate === root.plate })
   readonly property var hypershiftKeys: (st.buttons || []).filter(function(b) { return b.normal.kind === "hypershift" })
   readonly property var strandedKeys: (st.buttons || []).filter(function(b) { return b.normal.kind === "hypershift" && !b.canBeKey })
   readonly property var valueOptions: edKind === "mouse" ? [
@@ -169,10 +177,19 @@ Panel {
     }
     connected = !!r.connected
     permission = r.permission !== false
+    if (r.mice !== undefined) {
+      mice = r.mice
+      currentMouse = r.mouse || ""
+      if (!r.ok && loaded && r.mouse !== st.mouse) {  // switched to a mouse that isn't answering: don't show the other one's settings
+        st = ({})
+        selectedId = -1
+        editLayer = "normal"
+      }
+    }
     if (r.battery !== undefined) {
       battery = r.battery
       if (r.alert) Quickshell.execDetached(["notify-send", "-a", "Omanaga", "-i", "input-mouse", "--",
-                                            "Mouse battery low", "Battery is at " + Math.round(battery) + "%. It takes one AA."])
+                                            "Mouse battery low", (r.mouseName || "Mouse") + " battery is at " + Math.round(battery) + "%. " + (r.batteryNote || "")])
     }
     if (!r.ok) {
       if (pendingIsBackground) return  // a sleeping mouse isn't worth a red message
@@ -182,7 +199,13 @@ Panel {
     }
     if (r.buttons) {
       // Reset only what this command changed, so unsaved edits elsewhere in the panel survive.
-      var all = !loaded || ["state", "apply-layout", "preset"].indexOf(pendingCmd) >= 0
+      var switched = loaded && r.mouse !== st.mouse
+      var all = !loaded || switched || ["state", "select-mouse", "apply-layout", "preset"].indexOf(pendingCmd) >= 0
+      if (switched) {  // the other mouse has other buttons, so nothing chosen on this one carries over
+        selectedId = -1
+        editLayer = "normal"
+      }
+      if (!(r.plates || []).some(function(p) { return p.buttons === plate })) plate = 12
       st = r
       if (all || pendingCmd === "set-dpi") draftStages = r.stages.slice()
       if (all || pendingCmd === "set-dpi" || pendingCmd === "set-current-dpi") {
@@ -371,8 +394,8 @@ Panel {
     text: "\u{F037D}"
     opacity: root.connected ? 1 : 0.5
     foreground: root.connected && root.battery >= 0 && root.battery <= root.lowBattery ? root.urgent : root.barForeground
-    tooltipText: !root.connected ? "Naga: dongle not found"
-      : root.battery >= 0 ? "Naga: battery " + root.battery + "%" : "Naga"
+    tooltipText: !root.connected ? "Naga: receiver not found"
+      : root.battery >= 0 ? (root.st.mouseName || "Naga") + ": battery " + root.battery + "%" : (root.st.mouseName || "Naga")
     onPressed: function(b) { root.toggle() }
   }
 
@@ -757,7 +780,7 @@ Panel {
                 id: titleText
                 anchors.verticalCenter: parent.verticalCenter
                 textFormat: Text.PlainText
-                text: "Naga V2 HyperSpeed"
+                text: root.st.mouseName || (root.mice.filter(function(m) { return m.id === root.currentMouse })[0] || { name: "Naga V2 HyperSpeed" }).name
                 color: root.foreground
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.heading
@@ -771,6 +794,20 @@ Panel {
                 color: root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
+              }
+              Repeater {
+                // Both mice plugged in: pick which one this panel shows. The pick is remembered.
+                model: root.mice.length > 1 ? root.mice : []
+                Button {
+                  required property var modelData
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: modelData.name.replace("Naga V2 ", "")
+                  bordered: true
+                  selected: root.currentMouse === modelData.id
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                  onClicked: if (!selected) root.run(["select-mouse", modelData.id])
+                }
               }
             }
             Text {
@@ -796,7 +833,7 @@ Panel {
               showGauge: root.battery >= 0
               value: root.battery >= 0 ? root.battery + "%" : "?"
               valueColor: root.battery >= 0 && root.battery <= root.lowBattery ? root.urgent : root.foreground
-              note: "1 x AA"
+              note: root.st.mouse === "pro" ? "rechargeable" : "1 x AA"
             }
             StatTile {
               width: statRow.tileWidth
@@ -901,7 +938,7 @@ Panel {
               width: parent.width
               horizontalAlignment: Text.AlignHCenter
               textFormat: Text.PlainText
-              text: !root.connected ? "Dongle not found" : !root.permission ? "One setup step needed" : root.busy ? "Reading the mouse..." : "The mouse is asleep or not answering"
+              text: !root.connected ? "Mouse receiver not found" : !root.permission ? "One setup step needed" : root.busy ? "Reading the mouse..." : "The mouse is asleep or not answering"
               color: root.foreground
               font.family: root.fontFamily
               font.pixelSize: Style.font.title
@@ -910,7 +947,7 @@ Panel {
             Info {
               horizontalAlignment: Text.AlignHCenter
               visible: text !== ""
-              text: !root.connected ? "Plug in the mouse's USB dongle and set the mouse to 2.4 GHz. Settings can't be changed over Bluetooth."
+              text: !root.connected ? "Plug in the Naga V2 HyperSpeed's USB dongle or the Naga V2 Pro's Mouse Dock Pro, and set the mouse to 2.4 GHz. Settings can't be changed over Bluetooth."
                 : !root.permission ? "So this panel can talk to the mouse, run this once in a terminal. It shows what it will do and asks first:"
                 : root.busy ? "" : "Move the mouse to wake it, then try again. Commands alone can't wake it."
               font.pixelSize: Style.font.body
@@ -1004,7 +1041,32 @@ Panel {
                     Column {
                       width: board.sideWidth
                       spacing: Style.space(6)
-                      SubLabel { text: "SIDE PANEL" }
+                      Item {
+                        width: parent.width
+                        height: Math.max(sideLabel.implicitHeight, plateToggle.implicitHeight)
+                        SubLabel { id: sideLabel; text: "SIDE PANEL"; anchors.verticalCenter: parent.verticalCenter }
+                        Row {
+                          id: plateToggle
+                          visible: (root.st.plates || []).length > 1
+                          anchors.right: parent.right
+                          spacing: Style.space(4)
+                          Repeater {
+                            model: root.st.plates || []
+                            Button {
+                              required property var modelData
+                              text: String(modelData.buttons)
+                              bordered: true
+                              selected: root.plate === modelData.buttons
+                              foreground: root.foreground
+                              fontFamily: root.fontFamily
+                              onClicked: {
+                                root.plate = modelData.buttons
+                                if (root.selectedButton && root.selectedButton.plate && root.selectedButton.plate !== root.plate) root.selectedId = -1
+                              }
+                            }
+                          }
+                        }
+                      }
                       Grid {
                         id: sideGrid
                         width: parent.width
@@ -1035,13 +1097,17 @@ Panel {
                       }
                       Cell { width: topColumn.width; button: root.buttonById(0x03) }
                       Row {
+                        visible: root.buttonById(root.topIds[0]) !== null
                         spacing: topColumn.spacing
-                        Cell { width: topColumn.halfWidth; button: root.buttonById(0x0b) }
-                        Cell { width: topColumn.halfWidth; button: root.buttonById(0x0c) }
+                        Cell { width: topColumn.halfWidth; button: root.buttonById(root.topIds[0]) }
+                        Cell { width: topColumn.halfWidth; button: root.buttonById(root.topIds[1]) }
                       }
+                      Cell { visible: button !== null; width: topColumn.width; button: root.buttonById(0x0e) }
                       Info {
                         text: root.editLayer === "hypershift" ? "Holding Hypershift only changes the side buttons."
-                          : "Click any button to choose what it does. The two top buttons don't have to change DPI, and only they can be the Hypershift key."
+                          : root.hasTopButtons ? "Click any button to choose what it does. The two top buttons don't have to change DPI, and only they can be the Hypershift key."
+                          : (root.st.plates || []).length > 1 ? "Click any button to choose what it does. The mouse keeps a map for each side plate, so pick the plate that's fitted. Any side button or the wheel click can be the Hypershift key."
+                          : "Click any button to choose what it does."
                       }
                     }
                   }

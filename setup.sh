@@ -12,9 +12,10 @@ installed="$rules_dir/70-omanaga.rules"
 old_installed="$rules_dir/70-naga-control.rules"
 reload=(udevadm control --reload-rules)
 trigger=(udevadm trigger --subsystem-match=hidraw --action=change)
-expected='# Lets the person logged in at this seat configure the Naga V2 HyperSpeed: its receiver'"'"'s control interface only.
+expected='# Lets the person logged in at this seat configure the Naga V2 HyperSpeed and Naga V2 Pro: their receivers'"'"' control interfaces only.
 # Two steps because udev requires all ATTRS in one rule to match the same parent device, and these live on different ones.
 SUBSYSTEM=="hidraw", ATTRS{idVendor}=="1532", ATTRS{idProduct}=="00b4", ENV{OMANAGA_CONTROL}="1"
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="1532", ATTRS{idProduct}=="00a4", ENV{OMANAGA_CONTROL}="1"
 SUBSYSTEM=="hidraw", ENV{OMANAGA_CONTROL}=="1", ATTRS{bInterfaceNumber}=="00", TAG+="uaccess"'
 
 yes=false
@@ -40,7 +41,7 @@ if $remove; then
   rm -f "$installed" "$old_installed"
   "${reload[@]}"
   "${trigger[@]}"
-  echo "Removed. Replug the dongle if the plugin can still reach the mouse."
+  echo "Removed. Replug the dongle or dock if the plugin can still reach the mouse."
   exit 0
 fi
 
@@ -78,4 +79,4 @@ fi
 rm -f "$old_installed"
 "${reload[@]}"
 "${trigger[@]}"
-echo "Done. If the plugin still says it has no permission, unplug and replug the dongle."
+echo "Done. If the plugin still says it has no permission, unplug and replug the dongle or dock."
