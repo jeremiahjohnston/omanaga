@@ -8,7 +8,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Lint
         run: pip install pyflakes && python3 -m pyflakes naga_ctl.py tools/probe.py tools/probe_pro.py tests/test_ctl.py
       - name: Backend tests
